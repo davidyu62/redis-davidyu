@@ -235,208 +235,472 @@ _추후 작성_
 
 # Redis Cluster 시스템 & 로그 모니터링
 
-## 복제 & 분산 시스템 개요
+## Replication
 
-## Master & Slave & Sentinel
+> 개념
 
-## 부분 동기화
+Redis에서 replication이란 데이터 유실을 최소화하기 위한 복사본을 만드는 이중화를 뜻한다.
+아래는 Replication 한 예시이다.
 
-## Redis Cluster 구축 및 운영
+![img](.//images//replication_ex1.PNG)
 
-### _Redis Cluster 명령어를 이용한 수동 설정_
+master server가 존재하고 두개의 slave서버가 master 서버를 바라보는 architecuture이다.  
+master server의 데이터가 실시간으로 slave 서버로 복제가 되며, slave 서버는 master 서버에 의해 쓰기 작업만 수행가능하며 사용자는 오로지 읽기 작업만 수행 가능하다. 위처럼 구성을 하더라도 <b>master server가 장애가 발생할 경우 자동으로 slave서버로 failover가 되지는 않는다.</b> 다만 slave server에 복제된 데이터를 이용하여 master server를 복구할 수는 있다.
 
-> 총 4대의 Redis 설치
+이것은 우리가 알고 있는 진정한 의미의 HA 구성은 아니다.이를 해결하기 위해서는 Sentinel 서버가 필요하다.  
+_<h3>What is Sentinel</h3>_
+
+sentinel은 failover를 지원하는 서버라고 이해하면 된다. master를 모니터링하다가 master가 죽었다고 판단될 시 slave를 master로 승격시킴으로써 reids의 availibility를 보장한다.  
+![img](.//images//replication_ex2.PNG)
+
+> 실습
+
+실습예제1) master서버 1대와 slave 서버 2대 연동
+
+_<h3>Step1</h3>_
+redis-master-5001.conf 파일 작성
+
+```conf
+bind 127.0.0.1        # 해당 IP로 접속하는 Client만 받아들이는 기능
+port 6379
+daemonize  yes        # daemon으로 실행
+```
+
+redis-slave-5003.conf, 5004 파일 작성
+
+```conf
+bind 127.0.0.1
+port 5003(slave -1) / port 5004(slave-2)
+replicaof 127.0.0.1 5001                  # master server ip, port
+daemonize yes
+```
+
+_<h3>Step2</h3>_
+서버 기동
 
 ```sh
-[lena@LNJDUWS2 redis-cluster]$ ls -lrt
-total 16
-drwxrwxr-x. 8 lena lena 4096 Mar  1 01:32 redis-slave-5004
-drwxrwxr-x. 8 lena lena 4096 Mar  1 01:32 redis-slave-5003
-drwxrwxr-x. 8 lena lena 4096 Mar  1 01:32 redis-master-5002
-drwxrwxr-x. 8 lena lena 4096 Mar  1 01:32 redis-master-5001
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-server redis-master-5001.conf
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-server redis-slave-5003.conf
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-server redis-slave-5004.conf
+[lena@LNJDUWS2 redis-replication]$ ps -ef | grep redis
+lena     3175558       1  0 09:58 ?        00:00:00 ./src/redis-server 127.0.0.1:5001
+lena     3175606       1  0 09:58 ?        00:00:00 ./src/redis-server 127.0.0.1:5003
+lena     3175638       1  0 09:58 ?        00:00:00 ./src/redis-server 127.0.0.1:5004
+lena     3175668 3164384  0 09:58 pts/0    00:00:00 grep --color=auto redis
+
 ```
 
-> redis.conf 파일 수정
+※ replication 을 사용하기 위해서는 co nf 파일에 cluster-enabled 값이 no로 setting되어야 한다.  
+ default값은 yes이므로 no로 변경이 필요하다. yes일 경우 기동 오류 발생함
 
-```properties
-port                        5001
-cluster-enabled             yes
-cluster-config-file         nodes-5001.conf
-cluster-node-timeout        5000
-dir                         ./data
-appendonly                  yes
-```
+_<h3>Step3</h3>_
 
-위 설정을 다른 3대의 서버에도 적용한다.(port는 변경)
-
-# Redis - Tomcat Session 연동
-
-> Redis Session Manager 다운로드
+replication 확인
 
 ```sh
- wget https://github.com/ran-jit/tomcat-cluster-redis-session-manager/releases/download/2.0.4/tomcat-cluster-redis-session-manager.zip
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-cli -p 5001      # master 서버 접속
+127.0.0.1:5001> set lg cns
+OK
+127.0.0.1:5001> exit
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-cli -p 5003      # slave 1 접속
+127.0.0.1:5003> get lg
+"cns"
+127.0.0.1:5003> exit
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-cli -p 5004      # slave 2 접속
+127.0.0.1:5004> get lg
+"cns"
 ```
 
-> 압축 해제 및 library, conf 파일을 tomcat 하위 폴더로 복사
+실습예제2) master, slave, sentinel 연동
+_<h3>Step1</h3>_
+sentinel.conf 수정(총 3개의 conf 파일을 만든다)
+
+```conf
+# sentinel monitor <master-name> <ip> <redis-port> <quorum>
+sentinel monitor lat-master 127.0.0.1 5001 2
+```
+
+_<h3>Step2</h3>_
+각각의 sentinel 서버를 ./redis-server sentinel.conf 명령어를 통해 수행한다.
+
+_<h3>Step3</h3>_
+테스트
 
 ```sh
-[lena@LNJDUWS2 tomcat]$ unzip tomcat-cluster-redis-session-manager.zip
-[lena@LNJDUWS2 tomcat]$ cp tomcat-cluster-redis-session-manager/lib/* ./apache-tomcat-8.5.91/lib
-[lena@LNJDUWS2 tomcat]$ cp tomcat-cluster-redis-session-manager/conf/* ./apache-tomcat-8.5.91/conf
-[lena@LNJDUWS2 tomcat]$ cd apache-tomcat-8.5.91/conf/
-[lena@LNJDUWS2 conf]$ vi redis-data-cache.properties
+## 1대의 master, 2대의 slave, 3대의 sentinel 프로세스 확인
+[lena@LNJDUWS2 redis-replication]$ ps -ef | grep redis
+lena     3179326       1  0 10:08 ?        00:00:02 ./src/redis-server 127.0.0.1:5003
+lena     3179346       1  0 10:08 ?        00:00:02 ./src/redis-server 127.0.0.1:5004
+lena     3182765       1  0 10:17 ?        00:00:01 ./src/redis-sentinel *:26379 [sentinel]
+lena     3182789       1  0 10:17 ?        00:00:03 ./src/redis-sentinel *:26389 [sentinel]
+lena     3182807       1  0 10:17 ?        00:00:03 ./src/redis-sentinel *:26399 [sentinel]
+lena     3185165       1  0 10:24 ?        00:00:00 ./src/redis-server 127.0.0.1:5001
+
+# sentinel 서버 접속 후 info 확인
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-cli -p 26379
+127.0.0.1:26379> info sentinel
+# Sentinel
+sentinel_masters:1
+sentinel_tilt:0
+sentinel_tilt_since_seconds:-1
+sentinel_running_scripts:0
+sentinel_scripts_queue_length:0
+sentinel_simulate_failure_flags:0
+master0:name=lat-master,status=sdown,address=127.0.0.1:5001,slaves=2,sentinels=3
+
+# master 서버 process kill 후 5003 slave 서버 접속
+[lena@LNJDUWS2 redis-replication]$ kill -9 3185165
+[lena@LNJDUWS2 redis-replication]$ ps -ef | grep redis
+lena     3179326       1  0 10:08 ?        00:00:02 ./src/redis-server 127.0.0.1:5003
+lena     3179346       1  0 10:08 ?        00:00:02 ./src/redis-server 127.0.0.1:5004
+lena     3182765       1  0 10:17 ?        00:00:01 ./src/redis-sentinel *:26379 [sentinel]
+lena     3182789       1  0 10:17 ?        00:00:03 ./src/redis-sentinel *:26389 [sentinel]
+lena     3182807       1  0 10:17 ?        00:00:03 ./src/redis-sentinel *:26399 [sentinel]
+127.0.0.1:5003> info replication
+# Replication
+role:slave
+master_host:127.0.0.1
+master_port:5004                    ## master 서버가 5004 slave 서버로 변경됨을 볼 수 있다.
+master_link_status:up
+master_last_io_seconds_ago:0
+master_sync_in_progress:0
+slave_read_repl_offset:273053
+slave_repl_offset:273053
+slave_priority:100
+slave_read_only:1
+replica_announced:1
+connected_slaves:0
+master_failover_state:no-failover
+master_replid:feecd652b657966d06f336483116fa1b0c364449
+master_replid2:1817233988556458e0d1548291e489c7c81d74a9
+master_repl_offset:273053
+second_repl_offset:10242
+repl_backlog_active:1
+repl_backlog_size:1048576
+repl_backlog_first_byte_offset:1118
+repl_backlog_histlen:271936
+
+# 5004 slave 서버 접속
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-cli -p 5004
+127.0.0.1:5004> info replication
+# Replication
+role:master                           ## role이 master임을 알 수 있다.
+connected_slaves:1
+slave0:ip=127.0.0.1,port=5003,state=online,offset=283653,lag=0
+master_failover_state:no-failover
+master_replid:feecd652b657966d06f336483116fa1b0c364449
+master_replid2:1817233988556458e0d1548291e489c7c81d74a9
+master_repl_offset:283923
+second_repl_offset:10242
+repl_backlog_active:1
+repl_backlog_size:1048576
+repl_backlog_first_byte_offset:1118
+repl_backlog_histlen:282806
+
+# master 서버(5001) 기동 후 5004 slave 서버의 role 확인
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-server ./redis-master-5001.conf
+[lena@LNJDUWS2 redis-replication]$ ps -ef | grep redis
+lena     3179326       1  0 10:08 ?        00:00:05 ./src/redis-server 127.0.0.1:5003
+lena     3179346       1  0 10:08 ?        00:00:04 ./src/redis-server 127.0.0.1:5004
+lena     3182765       1  0 10:17 ?        00:00:04 ./src/redis-sentinel *:26379 [sentinel]
+lena     3182789       1  0 10:17 ?        00:00:08 ./src/redis-sentinel *:26389 [sentinel]
+lena     3182807       1  0 10:17 ?        00:00:08 ./src/redis-sentinel *:26399 [sentinel]
+lena     3194103       1  0 10:48 ?        00:00:00 ./src/redis-server 127.0.0.1:5001
+
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-cli -p 5004
+127.0.0.1:5004> info replication
+# Replication
+role:master                                             ## failback이 이루어지지 않음(추후 확인 필요)
+connected_slaves:2
+slave0:ip=127.0.0.1,port=5003,state=online,offset=327184,lag=0
+slave1:ip=127.0.0.1,port=5001,state=online,offset=327184,lag=0
+master_failover_state:no-failover
+master_replid:feecd652b657966d06f336483116fa1b0c364449
+master_replid2:1817233988556458e0d1548291e489c7c81d74a9
+master_repl_offset:327319
+second_repl_offset:10242
+repl_backlog_active:1
+repl_backlog_size:1048576
+repl_backlog_first_byte_offset:1118
+repl_backlog_histlen:326202
 
 ```
 
-> redis-data-cache.properties 설정
+## Clustering
+
+> 개념
+
+하나의 standalone 서버 만으로 처리할 수 없을 만큼 빅데이터가 발생하는 비즈니스 환경에서는 성능지연, 다양한 장애 현상이 발생하게 된다.
+이를 해결하기 위한 방법으로 Redis Cluster(Shard-Replication) 이다.
+
+> 실습
 
 ```sh
-#-- Redis data-cache configuration
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5001 cluster meet 127.0.0.1 5003
+OK
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5001 cluster meet 127.0.0.1 5004
+OK
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5001 cluster meet 127.0.0.1 5005
+OK
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5001 cluster meet 127.0.0.1 5006
+OK
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5001 cluster meet 127.0.0.1 5002
 
-#- redis hosts ex: 127.0.0.1:6379, 127.0.0.2:6379, 127.0.0.2:6380, ....
-redis.hosts=127.0.0.1:5000
+# cluster node 확인
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5001 cluster nodes
+2b29a88d97d77ff9e0f234f218e75a8d87366dae 127.0.0.1:5003@15003 master - 0 1691041612581 3 connected 10923-16383
+27993bbbab750950e9fd514c59126290bef83865 127.0.0.1:5004@15004 master - 0 1691041612000 4 connected
+80eff62f0b65e7759662d59542cc043d598c1c1e 127.0.0.1:5001@15001 myself,master - 0 1691041611000 1 connected 0-5460
+428f78b2035e9983be5408b55dd8496c8620f3ad 127.0.0.1:5006@15006 master - 0 1691041613184 5 connected
+c38668d16da33f5f175e1e9b13f33ef8ba39f5ed 127.0.0.1:5005@15005 master - 0 1691041612581 0 connected
+de288c03ffefe65905184ecc45a9defea9f0df83 127.0.0.1:5002@15002 master - 0 1691041612180 2 connected 5461-10922
 
-#- redis password (for stand-alone mode)
-#redis.password=
+# slave 서버를 각 master 서버로의 복제서버로 지정
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5004 cluster replicate 80eff62f0b65e7759662d59542cc043d598c1c1e
+OK
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5004 cluster^Ceplicate 80eff62f0b65e7759662d59542cc043d598c1c1e
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5005 cluster replicate de288c03ffefe65905184ecc45a9defea9f0df83
+OK
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5006 cluster replicate 2b29a88d97d77ff9e0f234f218e75a8d87366dae
+OK
 
-#- set true to enable redis cluster mode
-redis.cluster.enabled=false
+# cluster node 확인
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5004 cluster slots
+1) 1) (integer) 0         # start slot
+   2) (integer) 5460      # end slot
+   3) 1) "127.0.0.1"
+      2) (integer) 5001               # master
+      3) "80eff62f0b65e7759662d59542cc043d598c1c1e"
+      4) (empty array)
+   4) 1) "127.0.0.1"
+      2) (integer) 5004               # master
+      3) "27993bbbab750950e9fd514c59126290bef83865"
+      4) (empty array)
+2) 1) (integer) 5461
+   2) (integer) 10922
+   3) 1) "127.0.0.1"
+      2) (integer) 5002
+      3) "de288c03ffefe65905184ecc45a9defea9f0df83"
+      4) (empty array)
+   4) 1) "127.0.0.1"
+      2) (integer) 5005
+      3) "c38668d16da33f5f175e1e9b13f33ef8ba39f5ed"
+      4) (empty array)
+3) 1) (integer) 10923
+   2) (integer) 16383
+   3) 1) "127.0.0.1"
+      2) (integer) 5003
+      3) "2b29a88d97d77ff9e0f234f218e75a8d87366dae"
+      4) (empty array)
+   4) 1) "127.0.0.1"
+      2) (integer) 5006
+      3) "428f78b2035e9983be5408b55dd8496c8620f3ad"
+      4) (empty array)
+```
 
-#- redis database (default 0)
-#redis.database=0
+## Logging & Monitoring
 
-#- redis connection timeout (default 2000)
-#redis.timeout=2000
+> Logging 정보
+
+loglevel 파라미터를 설정하여 로그를 수집할 수 있으며 수집된 정보는 lofile 파라미터를 통해 사용자가 원하는 곳에 저장이 가능합니다.
+
+```sh
+[lena@LNJDUWS2 redis-replication]$ vi redis-master-5001.conf
+
+# Specify the server verbosity level.
+# This can be one of:
+# debug (a lot of information, useful for development/testing)
+# verbose (many rarely useful info, but not a mess like the debug level)
+# notice (moderately verbose, what you want in production probably)
+# warning (only very important / critical messages are logged)
+loglevel notice
+
+# Specify the log file name. Also the empty string can be used to force
+# Redis to log on the standard output. Note that if you use standard
+# output for logging but daemonize, logs will be sent to /dev/null
+logfile "/engn001/redis/redis-cluster-system/redis-replication/logs/redis_master_5001.log"
+
+# To enable logging to the system logger, just set 'syslog-enabled' to yes,
+# and optionally update the other syslog parameters to suit your needs.
+syslog-enabled yes          # 시스템 로그 수집 여부
+
+# Specify the syslog identity.
+syslog-ident redis-master   # 시스템 로그의 식별자
+
 
 ```
 
-> context.xml 설정
+> 모니터링
 
-SessionHAndlerValve와 SessionManager를 추가
+```sh
+[lena@LNJDUWS2 redis-replication]$ vi redis-master-5001.conf
+
+
+# By default latency monitoring is disabled since it is mostly not needed
+# if you don't have latency issues, and collecting data has a performance
+# impact, that while very small, can be measured under big load. Latency
+# monitoring can easily be enabled at runtime using the command
+# "CONFIG SET latency-monitor-threshold <milliseconds>" if needed.
+latency-monitor-threshold 25  # 25밀리케컨드 이상 소요되는 작업을 수집 분석 한다
+enable-debug-command yes      # redis-cli에서 debug 명령어를 수행하기 위해 yes로 설정한다
+
+
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-cli -p 5001
+
+127.0.0.1:5001> debug sleep .25
+OK
+127.0.0.1:5001> latency latest
+1) 1) "command"
+   2) (integer) 1691368790
+   3) (integer) 250
+   4) (integer) 250
+127.0.0.1:5001> latency doctor
+Dave, I have observed latency spikes in this Redis instance. You don't mind talking about it, do you Dave?
+
+1. command: 1 latency spikes (average 250ms, mean deviation 0ms, period 21.00 sec). Worst all time event 250ms.
+
+I have a few advices for you:
+
+- Check your Slow Log to understand what are the commands you are running which are too slow to execute. Please check https://redis.io/commands/slowlog for more information.
+- Deleting, expiring or evicting (because of maxmemory policy) large objects is a blocking operation. If you have very large objects that are often deleted, expired, or evicted, try to fragment those objects into multiple smaller objects.
+- I detected a non zero amount of anonymous huge pages used by your process. This creates very serious latency events in different conditions, especially when Redis is persisting on disk. To disable THP support use the command 'echo never > /sys/kernel/mm/transparent_hugepage/enabled', make sure to also add it into /etc/rc.local so that the command will be executed again after a reboot. Note that even if you have already disabled THP, you still need to restart the Redis process to get rid of the huge pages already created.
+127.0.0.1:5001> exit
+
+
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-cli -p 5001 --latency
+min: 0, max: 1, avg: 0.20 (1242 samples)
+
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-cli -p 5001 --latency-history
+min: 0, max: 1, avg: 0.15 (1461 samples) -- 15.00 seconds range
+min: 0, max: 1, avg: 0.12 (1462 samples) -- 15.01 seconds range
+
+[lena@LNJDUWS2 redis-replication]$ ./src/redis-cli -p 5001 --bigkeys
+
+# Scanning the entire keyspace to find biggest keys as well as
+# average sizes per key type.  You can use -i 0.1 to sleep 0.1 sec
+# per 100 SCAN commands (not usually needed).
+
+[00.00%] Biggest string found so far '"redis"' with 4 bytes
+[00.00%] Biggest hash   found so far '"4470CB83DD6E5F6C2CF1CAFDEFBD3A8E"' with 2 fields
+[00.00%] Biggest string found so far '"jvmRoute"' with 17 bytes
+
+-------- summary -------
+
+Sampled 6 keys in the keyspace!
+Total key length in bytes is 55 (avg len 9.17)
+
+Biggest   hash found '"4470CB83DD6E5F6C2CF1CAFDEFBD3A8E"' has 2 fields
+Biggest string found '"jvmRoute"' has 17 bytes
+
+0 lists with 0 items (00.00% of keys, avg size 0.00)
+1 hashs with 2 fields (16.67% of keys, avg size 2.00)
+5 strings with 31 bytes (83.33% of keys, avg size 6.20)
+0 streams with 0 entries (00.00% of keys, avg size 0.00)
+0 sets with 0 members (00.00% of keys, avg size 0.00)
+0 zsets with 0 members (00.00% of keys, avg size 0.00)
+
+
+
+```
+
+## Redis Cluster 장애 복구
+
+## Client for Redis Server
+
+Redis Server로 접속하여 데이터를 처리할 수 있는 클라이언트 API는 대표적으로 JEDIS, Redisson, Lettuce 3가지가 있다.
+최근 트렌드는 Lettuce를 쓰는데 그 이유는 성능면에서 다른 두 API보다 앞서기 때문이다.  
+아래는 spring boot 에서 Lettuce를 활용한 Sample Code이다.
 
 ```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!--
-  Licensed to the Apache Software Foundation (ASF) under one or more
-  contributor license agreements.  See the NOTICE file distributed with
-  this work for additional information regarding copyright ownership.
-  The ASF licenses this file to You under the Apache License, Version 2.0
-  (the "License"); you may not use this file except in compliance with
-  the License.  You may obtain a copy of the License at
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
+```
 
-      http://www.apache.org/licenses/LICENSE-2.0
+Lettuce를 활용하기 위한 Configuration
 
-  Unless required by applicable law or agreed to in writing, software
-  distributed under the License is distributed on an "AS IS" BASIS,
-  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  See the License for the specific language governing permissions and
-  limitations under the License.
--->
-<!-- The contents of this file will be loaded for each web application -->
-<Context>
+```java
+package org.lat.dooly;
 
-    <!-- Default set of monitored resources. If one of these changes, the    -->
-    <!-- web application will be reloaded.                                   -->
-    <WatchedResource>WEB-INF/web.xml</WatchedResource>
-    <WatchedResource>${catalina.base}/conf/web.xml</WatchedResource>
+import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.data.redis.RedisProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.repository.configuration.EnableRedisRepositories;
+import org.springframework.data.redis.serializer.StringRedisSerializer;
 
-    <!-- Uncomment this to disable session persistence across Tomcat restarts -->
-    <!--
-    <Manager pathname="" />
-    -->
-    <Valve className="tomcat.request.session.redis.SessionHandlerValve" />
-    <Manager className="tomcat.request.session.redis.SessionManager" />
-</Context>
+@RequiredArgsConstructor
+@Configuration
+@EnableRedisRepositories
+public class RedisRepositoryConfig {
+    private final RedisProperties redisProperties;
+
+    // lettuce
+    @Bean
+    public RedisConnectionFactory redisConnectionFactory() {
+        return new LettuceConnectionFactory(redisProperties.getHost(), redisProperties.getPort());
+    }
+
+    @Bean
+    public RedisTemplate<String, Object> redisTemplate() {
+        RedisTemplate<String, Object> redisTemplate = new RedisTemplate<>();
+        redisTemplate.setConnectionFactory(redisConnectionFactory());
+        redisTemplate.setKeySerializer(new StringRedisSerializer());
+        redisTemplate.setValueSerializer(new StringRedisSerializer());
+        return redisTemplate;
+    }
+}
 
 ```
 
-> session.jsp 를 tomcat에 배포
+application.properties
 
-아래 jsp 는 sample이다.
+```properties
+spring.redis.host=127.0.0.1
+spring.redis.port=5001
 
-```jsp
-<%@page contentType="text/html; charset=UTF-8"%>
-<%@ page import="java.text.*"%>
-<%@ page import="java.util.*"%>
-<%
-  String RsessionId = request.getRequestedSessionId();
-  String sessionId = session.getId();
-  boolean isNew = session.isNew();
-  long creationTime = session.getCreationTime();
-  long lastAccessedTime = session.getLastAccessedTime();
-  int maxInactiveInterval = session.getMaxInactiveInterval();
-  Enumeration e = session.getAttributeNames();
-%>
-<html>
- <head>
-  <meta http-equiv="Content-Type" content="text/html; charset=EUC-KR">
-   <title>Session Test</title>
- </head>
- <body>
-    <table border=1 bordercolor="gray" cellspacing=1 cellpadding=0 width="100%">
-      <tr bgcolor="gray">
-       <td colspan=2 align="center"><font color="white"><b>Session Info</b></font></td>
-      </tr>
-     <tr>
-       <td>Server HostName</td>
-       <td><%=java.net.InetAddress.getLocalHost().getHostName()%></td>
-     </tr>
-     <tr>
-       <td>Server IP</td>
-       <td><%=java.net.InetAddress.getLocalHost().getHostAddress()%></td>
-     </tr>
-     <tr>
-       <td>Request SessionID</td>
-       <td><%=RsessionId%></td>
-     </tr>
-     <tr>
-       <td>SessionID</td>
-       <td><%=sessionId%></td>
-     </tr>
-     <tr>
-       <td>isNew</td>
-       <td><%=isNew%></td>
-     </tr>
-     <tr>
-       <td>Creation Time</td>
-       <td><%=new Date(creationTime)%></td>
-     </tr>
-     <tr>
-       <td>Last Accessed Time</td>
-       <td><%=new Date(lastAccessedTime)%></td>
-     </tr>
-     <tr>
-       <td>Max Inactive Interval (second)</td>
-       <td><%=maxInactiveInterval%></td>
-     </tr>
-     <tr bgcolor="cyan">
-       <td colspan=2 align="center"><b>Session Value List</b></td>
-     </tr>
-     <tr>
-       <td align="center">NAME</td>
-      <td align="center">VAULE</td>
-     </tr>
-<%
- String name = null;
- while (e.hasMoreElements()) {
- name = (String) e.nextElement();
-%>
-    <tr>
-       <td align="left"><%=name%></td>
-       <td align="left"><%=session.getAttribute(name)%></td>
-     </tr>
-<%
- }
-%>
-</table>
-<%
- int count = 0;
- if(session.getAttribute("count") != null)
- count = (Integer) session.getAttribute("count");
- count += 1;
- session.setAttribute("count", count);
- out.println(session.getId() + " : " + count);
-%>
-  </body>
-</html>
+# for redis cluster
+spring.redis.cluster.nodes[0]=127.0.0.1:5001
+spring.redis.cluster.nodes[1]=127.0.0.1:5002
+spring.redis.cluster.nodes[2]=127.0.0.1:5003
 ```
+
+실제 호출 소스
+
+```java
+package org.lat.dooly;
+
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class RedisController {
+
+    @Autowired
+    private RedisTemplate redisTemplate;
+
+    @GetMapping("/set")
+    public String set(){
+        redisTemplate.opsForValue().set("key","davidyu");
+        return "success";
+    }
+
+    @GetMapping("/get")
+    public String get(){
+        System.out.println("redisTemplate get value => {}" + redisTemplate.opsForValue().get("key"));
+        return "success";
+    }
+}
+
+
+```
+
+## 로그 모니터링
