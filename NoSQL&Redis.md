@@ -235,6 +235,21 @@ _추후 작성_
 
 # Redis Cluster 시스템 & 로그 모니터링
 
+## 개요
+
+데이터를 하나의 서버에 저장하지 않고 분산하여 저장을 하는데 이는 자원 공유, 성능 향상, 안정성을 확보하기 위한 방안이다.
+Redis는 마스터, 슬레이브, 센티널, 파티션 클러스트 등의 기능을 통해 데이터를 복제하고 분산 처리를 합니다.
+
+> 범위 파티션
+
+Key값을 기준으로 데이터를 분산하여 저장한다. 예를 들어 key가 1~100은 1번 서버에 101~200은 2번 서버에 201~300은 3번 서버에
+저장하는 방식이다.
+
+> 해시 파티션
+
+범위 파티션은 사용자가 직접 설계를 하게 되며 이 경우 데이터 양과 분산 정보가 현저히 떨어지는 경우가 발생할 수 있다.
+해시 파티션은 이를 해결하기 위해 Hash Algorithm에 의해 데이터를 골고루 분산 저장할 수 있도록 해준다.
+
 ## Replication
 
 > 개념
@@ -290,7 +305,7 @@ lena     3175668 3164384  0 09:58 pts/0    00:00:00 grep --color=auto redis
 
 ```
 
-※ replication 을 사용하기 위해서는 co nf 파일에 cluster-enabled 값이 no로 setting되어야 한다.  
+※ replication 을 사용하기 위해서는 conf 파일에 cluster-enabled 값이 no로 setting되어야 한다.  
  default값은 yes이므로 no로 변경이 필요하다. yes일 경우 기동 오류 발생함
 
 _<h3>Step3</h3>_
@@ -426,6 +441,8 @@ repl_backlog_histlen:326202
 
 ```
 
+※ 외부에서 Sentinel에 접속하기 위해서는 master,slave 들이 protected-mode 가 아니거나 비밀번호를 설정해야 한다
+
 ## Clustering
 
 > 개념
@@ -434,6 +451,9 @@ repl_backlog_histlen:326202
 이를 해결하기 위한 방법으로 Redis Cluster(Shard-Replication) 이다.
 
 > 실습
+
+클러스터링을 수동으로 설정하는 방법이며 이 외에도 redis-trib.rb 유틸리티를 이용하여 자동 설정 방법이 존재한다.
+여기서는 다루지 않겠다.
 
 ```sh
 [lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5001 cluster meet 127.0.0.1 5003
@@ -458,7 +478,6 @@ de288c03ffefe65905184ecc45a9defea9f0df83 127.0.0.1:5002@15002 master - 0 1691041
 # slave 서버를 각 master 서버로의 복제서버로 지정
 [lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5004 cluster replicate 80eff62f0b65e7759662d59542cc043d598c1c1e
 OK
-[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5004 cluster^Ceplicate 80eff62f0b65e7759662d59542cc043d598c1c1e
 [lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5005 cluster replicate de288c03ffefe65905184ecc45a9defea9f0df83
 OK
 [lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5006 cluster replicate 2b29a88d97d77ff9e0f234f218e75a8d87366dae
@@ -473,7 +492,7 @@ OK
       3) "80eff62f0b65e7759662d59542cc043d598c1c1e"
       4) (empty array)
    4) 1) "127.0.0.1"
-      2) (integer) 5004               # master
+      2) (integer) 5004
       3) "27993bbbab750950e9fd514c59126290bef83865"
       4) (empty array)
 2) 1) (integer) 5461
@@ -496,6 +515,32 @@ OK
       2) (integer) 5006
       3) "428f78b2035e9983be5408b55dd8496c8620f3ad"
       4) (empty array)
+```
+
+5001번 Master 서버의 내용이 5004 Slave 서버로 복제가 잘 되었는지 확인
+
+```sh
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5001
+127.0.0.1:5001> clear
+127.0.0.1:5001> keys *
+(empty array)
+127.0.0.1:5001> set lg cns
+OK
+127.0.0.1:5001> get lg
+"cns"
+127.0.0.1:5001> exit
+[lena@LNJDUWS2 redis-cluster]$ ./src/redis-cli -p 5004
+127.0.0.1:5004> get lg
+(error) MOVED 4614 127.0.0.1:5001
+127.0.0.1:5004> keys *
+1) "lg"
+127.0.0.1:5004> get lg
+(error) MOVED 4614 127.0.0.1:5001
+127.0.0.1:5004> readonly                # readonly를 수행해줘야 위와 같은 error가 발생하지 않는다
+OK
+127.0.0.1:5004> get lg
+"cns"
+
 ```
 
 ## Logging & Monitoring
@@ -555,7 +600,8 @@ OK
    3) (integer) 250
    4) (integer) 250
 127.0.0.1:5001> latency doctor
-Dave, I have observed latency spikes in this Redis instance. You don't mind talking about it, do you Dave?
+
+"Dave, I have observed latency spikes in this Redis instance. You don't mind talking about it, do you Dave?
 
 1. command: 1 latency spikes (average 250ms, mean deviation 0ms, period 21.00 sec). Worst all time event 250ms.
 
@@ -563,7 +609,8 @@ I have a few advices for you:
 
 - Check your Slow Log to understand what are the commands you are running which are too slow to execute. Please check https://redis.io/commands/slowlog for more information.
 - Deleting, expiring or evicting (because of maxmemory policy) large objects is a blocking operation. If you have very large objects that are often deleted, expired, or evicted, try to fragment those objects into multiple smaller objects.
-- I detected a non zero amount of anonymous huge pages used by your process. This creates very serious latency events in different conditions, especially when Redis is persisting on disk. To disable THP support use the command 'echo never > /sys/kernel/mm/transparent_hugepage/enabled', make sure to also add it into /etc/rc.local so that the command will be executed again after a reboot. Note that even if you have already disabled THP, you still need to restart the Redis process to get rid of the huge pages already created.
+- I detected a non zero amount of anonymous huge pages used by your process. This creates very serious latency events in different conditions, especially when Redis is persisting on disk. To disable THP support use the command 'echo never > /sys/kernel/mm/transparent_hugepage/enabled', make sure to also add it into /etc/rc.local so that the command will be executed again after a reboot. Note that even if you have already disabled THP, you still need to restart the Redis process to get rid of the huge pages already created."
+
 127.0.0.1:5001> exit
 
 
@@ -605,7 +652,7 @@ Biggest string found '"jvmRoute"' has 17 bytes
 
 ## Redis Cluster 장애 복구
 
-## Client for Redis Server
+### Client for Redis Server
 
 Redis Server로 접속하여 데이터를 처리할 수 있는 클라이언트 API는 대표적으로 JEDIS, Redisson, Lettuce 3가지가 있다.
 최근 트렌드는 Lettuce를 쓰는데 그 이유는 성능면에서 다른 두 API보다 앞서기 때문이다.  
@@ -699,8 +746,4 @@ public class RedisController {
         return "success";
     }
 }
-
-
 ```
-
-## 로그 모니터링
