@@ -450,6 +450,8 @@ repl_backlog_histlen:326202
 하나의 standalone 서버 만으로 처리할 수 없을 만큼 빅데이터가 발생하는 비즈니스 환경에서는 성능지연, 다양한 장애 현상이 발생하게 된다.
 이를 해결하기 위한 방법으로 Redis Cluster(Shard-Replication) 이다.
 
+![img](.//images//redis-clustering.PNG)
+
 > 실습
 
 클러스터링을 수동으로 설정하는 방법이며 이 외에도 redis-trib.rb 유틸리티를 이용하여 자동 설정 방법이 존재한다.
@@ -540,6 +542,32 @@ OK
 OK
 127.0.0.1:5004> get lg
 "cns"
+
+```
+
+### 만약 master 서버가 다운됐을 경우?
+
+master서버가 다운됐을 경우에는 slave 서버가 master 서버로 전환된다.
+
+```sh
+127.0.0.1:5001> auth 1234
+OK
+127.0.0.1:5001> cluster nodes
+27993bbbab750950e9fd514c59126290bef83865 127.0.0.1:5004@15004 master,fail - 1693205776513 1693205773995 6 disconnected 0-5460
+2b29a88d97d77ff9e0f234f218e75a8d87366dae 127.0.0.1:5003@15003 master - 0 1693206139544 3 connected 10923-16383
+80eff62f0b65e7759662d59542cc043d598c1c1e 127.0.0.1:5001@15001 myself,slave 27993bbbab750950e9fd514c59126290bef83865 0 1693206138000 6 connected
+de288c03ffefe65905184ecc45a9defea9f0df83 127.0.0.1:5002@15002 master - 0 1693206140551 2 connected 5461-10922
+428f78b2035e9983be5408b55dd8496c8620f3ad 127.0.0.1:5006@15006 slave 2b29a88d97d77ff9e0f234f218e75a8d87366dae 0 1693206139000 3 connected
+c38668d16da33f5f175e1e9b13f33ef8ba39f5ed 127.0.0.1:5005@15005 slave de288c03ffefe65905184ecc45a9defea9f0df83 0 1693206140000 2 connected
+127.0.0.1:5001> cluster failover takeover
+OK
+127.0.0.1:5001> cluster nodes
+27993bbbab750950e9fd514c59126290bef83865 127.0.0.1:5004@15004 master,fail - 1693205776513 1693205773995 6 disconnected
+2b29a88d97d77ff9e0f234f218e75a8d87366dae 127.0.0.1:5003@15003 master - 0 1693206188159 3 connected 10923-16383
+80eff62f0b65e7759662d59542cc043d598c1c1e 127.0.0.1:5001@15001 myself,master - 0 1693206188000 7 connected 0-5460
+de288c03ffefe65905184ecc45a9defea9f0df83 127.0.0.1:5002@15002 master - 0 1693206189000 2 connected 5461-10922
+428f78b2035e9983be5408b55dd8496c8620f3ad 127.0.0.1:5006@15006 slave 2b29a88d97d77ff9e0f234f218e75a8d87366dae 0 1693206189165 3 connected
+c38668d16da33f5f175e1e9b13f33ef8ba39f5ed 127.0.0.1:5005@15005 slave de288c03ffefe65905184ecc45a9defea9f0df83 0 1693206187153 2 connected
 
 ```
 
