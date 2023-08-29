@@ -450,7 +450,7 @@ repl_backlog_histlen:326202
 하나의 standalone 서버 만으로 처리할 수 없을 만큼 빅데이터가 발생하는 비즈니스 환경에서는 성능지연, 다양한 장애 현상이 발생하게 된다.
 이를 해결하기 위한 방법으로 Redis Cluster(Shard-Replication) 이다.
 
-![img](.//images//redis-clustering.PNG)
+![img](.//images//redis-clustering.png)
 
 > 실습
 
